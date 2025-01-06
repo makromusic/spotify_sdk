@@ -30,6 +30,9 @@ class MethodNames {
   /// method name for [getAccessToken]
   static const String getAccessToken = 'getAccessToken';
 
+  /// method name for [getAuthorizationCode]
+  static const String getAuthorizationCode = 'getAuthorizationCode';
+
   /// method name for [disconnectFromSpotify]
   static const String disconnectFromSpotify = 'disconnectFromSpotify';
 
@@ -116,6 +119,9 @@ class ParamNames {
 
   /// param name for [redirectUrl]
   static const String redirectUrl = 'redirectUrl';
+
+  /// param name for [tokenSwapUrl]
+  static const String tokenSwapUrl = 'tokenSwapUrl';
 
   /// param name for [scope]
   static const String scope = 'scope';
