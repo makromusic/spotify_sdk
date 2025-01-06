@@ -5,6 +5,7 @@ public class SpotifySdkConstants
     //connecting
     public static let methodConnectToSpotify = "connectToSpotify"
     public static let methodGetAccessToken = "getAccessToken"
+    public static let methodGetAuthorizationCode = "getAuthorizationCode"
     public static let methodDisconnectFromSpotify = "disconnectFromSpotify"
 
     //player api
@@ -32,6 +33,8 @@ public class SpotifySdkConstants
     public static let paramClientId = "clientId"
     public static let paramRedirectUrl = "redirectUrl"
     public static let paramSpotifyUri = "spotifyUri"
+    public static let paramTokenSwapUrl = "tokenSwapUrl"
+    public static let paramTokenRefreshUrl = "tokenRefreshUrl"
     public static let paramAsRadio = "asRadio"
     public static let paramImageUri = "imageUri"
     public static let paramImageDimension = "imageDimension"

@@ -3,6 +3,7 @@ import SpotifyiOS
 class ConnectionStatusHandler: StatusHandler, SPTAppRemoteDelegate {
 
     var tokenResult: FlutterResult?
+    var codeResult: FlutterResult?
     var connectionResult: FlutterResult?
     
     func appRemoteDidEstablishConnection(_ appRemote: SPTAppRemote) {
@@ -12,12 +13,14 @@ class ConnectionStatusHandler: StatusHandler, SPTAppRemoteDelegate {
 
         connectionResult = nil
         tokenResult = nil
+        codeResult = nil
     }
 
     func appRemote(_ appRemote: SPTAppRemote, didFailConnectionAttemptWithError error: Error?) {
         defer {
             connectionResult = nil
             tokenResult = nil
+            codeResult = nil
         }
 
         if error != nil {
@@ -25,11 +28,13 @@ class ConnectionStatusHandler: StatusHandler, SPTAppRemoteDelegate {
             eventSink?("{\"connected\": false, \"errorCode\": \"\(error!._code)\", \"errorDetails\": \"\(error!.localizedDescription)\"}")
             connectionResult?(FlutterError(code: String(error!._code), message: error!.localizedDescription, details: nil))
             tokenResult?(FlutterError(code: String(error!._code), message: error!.localizedDescription, details: nil))
+            codeResult?(FlutterError(code: String(error!._code), message: error!.localizedDescription, details: nil))
         } else {
             // report disconnection to plugin
             eventSink?("{\"connected\": false}")
             connectionResult?(FlutterError(code: "errorConnection", message: "Failed Connection Attempt", details: nil))
             tokenResult?(FlutterError(code: "errorConnection", message: "Failed Connection Attempt", details: nil))
+            codeResult?(FlutterError(code: "errorConnection", message: "Failed Connection Attempt", details: nil))
         }
     }
 

@@ -1,7 +1,7 @@
 import Flutter
 import SpotifyiOS
 
-public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin {
+public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDelegate {
     private static var instance = SwiftSpotifySdkPlugin()
     private var appRemote: SPTAppRemote?
     private var connectionStatusHandler: ConnectionStatusHandler?
@@ -9,6 +9,8 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin {
     private var playerContextHandler: PlayerContextHandler?
     private static var playerStateChannel: FlutterEventChannel?
     private static var playerContextChannel: FlutterEventChannel?
+    private var requestedAuthCode: Bool?
+    private var mmSessionManager: SPTSessionManager?
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         guard playerStateChannel == nil else {
@@ -82,6 +84,51 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin {
             
             do {
                 try connectToSpotify(clientId: clientID, redirectURL: url, spotifyUri: spotifyUri, asRadio: swiftArguments[SpotifySdkConstants.paramAsRadio] as? Bool, additionalScopes: swiftArguments[SpotifySdkConstants.scope] as? String)
+            }
+            catch SpotifyError.redirectURLInvalid {
+                result(FlutterError(code: "errorConnecting", message: "Redirect URL is not set or has invalid format", details: nil))
+            }
+            catch {
+                result(FlutterError(code: "CouldNotFindSpotifyApp", message: "The Spotify app is not installed on the device", details: nil))
+                return
+            }
+        case SpotifySdkConstants.methodGetAuthorizationCode:
+            guard let swiftArguments = call.arguments as? [String:Any],
+                let clientID = swiftArguments[SpotifySdkConstants.paramClientId] as? String,
+                let tokenSwapUrl = swiftArguments[SpotifySdkConstants.paramTokenSwapUrl] as? String,
+                let tokenRefreshUrl = swiftArguments[SpotifySdkConstants.paramTokenRefreshUrl] as? String,
+                let url = swiftArguments[SpotifySdkConstants.paramRedirectUrl] as? String else {
+                    result(FlutterError(code: "Arguments Error", message: "One or more arguments are missing", details: nil))
+                    return
+            }
+            
+
+            let additionalScopes = swiftArguments[SpotifySdkConstants.scope] as? String? ?? ""
+            
+            connectionStatusHandler?.codeResult = result
+
+            do {
+                guard let redirectURL = URL(string: url) else {
+                    throw SpotifyError.redirectURLInvalid
+                }
+                
+                requestedAuthCode = true
+                
+                let configuration = SPTConfiguration(clientID: clientID, redirectURL: redirectURL)
+                // This prevents SDK from auto verifying the authorization code
+                // and generating an access token. Instead, it redirects the
+                // authorization code to the swap url.
+                configuration.tokenSwapURL = URL(string: tokenSwapUrl)
+                configuration.tokenRefreshURL = URL(string: tokenRefreshUrl)
+                mmSessionManager = SPTSessionManager(configuration: configuration, delegate: self)
+                var scopes: [String]?
+                if let additionalScopes = additionalScopes {
+                    scopes = additionalScopes.components(separatedBy: ",")
+                }
+                
+                let sptScope = scopeStringsToEnums(scopes: scopes)
+                self.mmSessionManager?.initiateSession(with: sptScope, options: .clientOnly, campaign: nil)
+                
             }
             catch SpotifyError.redirectURLInvalid {
                 result(FlutterError(code: "errorConnecting", message: "Redirect URL is not set or has invalid format", details: nil))
@@ -333,6 +380,23 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin {
         }
     }
 
+    public func sessionManager(manager: SPTSessionManager, didInitiate session: SPTSession) {
+        
+    }
+    
+    public func sessionManager(manager: SPTSessionManager, didFailWith error: Error) {
+        
+    }
+    
+    public func sessionManager(manager: SPTSessionManager, didRenew session: SPTSession) {
+        
+    }
+    
+    public func sessionManager(manager: SPTSessionManager, shouldRequestAccessTokenWith code: String) -> Bool {
+        connectionStatusHandler?.codeResult?(code)
+        return true
+    }
+
     private func connectToSpotify(clientId: String, redirectURL: String, accessToken: String? = nil, spotifyUri: String = "", asRadio: Bool?, additionalScopes: String? = nil) throws {
         func configureAppRemote(clientID: String, redirectURL: String, accessToken: String? = nil) throws {
             guard let redirectURL = URL(string: redirectURL) else {
@@ -358,24 +422,33 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin {
         if let additionalScopes = additionalScopes {
             scopes = additionalScopes.components(separatedBy: ",")
         }
-
-        if accessToken != nil {
-            appRemote?.connect()
-        } else {
-          // Note: A blank string will play the user's last song or pick a random one.
-          self.appRemote?.authorizeAndPlayURI(spotifyUri, asRadio: asRadio ?? false, additionalScopes: scopes) { success in
-            if (!success) {
-              self.connectionStatusHandler?.connectionResult?(FlutterError(code: "spotifyNotInstalled", message: "Spotify app is not installed", details: nil))
+        
+        // Note(resultanyildizi): Everything inside this block will now work on the main thread
+        DispatchQueue.main.async {
+            if accessToken != nil {
+                self.appRemote?.connect()
+            } else {
+              // Note: A blank string will play the user's last song or pick a random one.
+              // Note(resultanyildizi): If this is not called inside an async bloc
+              // Note(resultanyildizi): it is not successfully playing the media. It tries to reconnect
+              // Note(resultanyildizi): everytime a media is played.
+              self.appRemote?.authorizeAndPlayURI(spotifyUri, asRadio: asRadio ?? false, additionalScopes: scopes) { success in
+                if (!success) {
+                  self.connectionStatusHandler?.connectionResult?(FlutterError(code: "spotifyNotInstalled", message: "Spotify app is not installed", details: nil))
+                }
+              }
             }
-          }
         }
     }
 }
 
 extension SwiftSpotifySdkPlugin {
     public func application(_ application: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
-        setAccessTokenFromURL(url: url)
-        return true
+        if(requestedAuthCode == true) {
+            return setAuthorizationCodeFromURL(application, open: url, options: options)
+        } else {
+            return setAccessTokenFromURL(url: url)
+        }
     }
 
     public func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([Any]) -> Void) -> Bool {
@@ -389,17 +462,20 @@ extension SwiftSpotifySdkPlugin {
                 return false
         }
 
-        setAccessTokenFromURL(url: url)
-        return true
+        if(requestedAuthCode == true) {
+            return setAuthorizationCodeFromURL(application, open: url)
+        } else {
+            return setAccessTokenFromURL(url: url)
+        }
     }
 
-    private func setAccessTokenFromURL(url: URL) {
+    private func setAccessTokenFromURL(url: URL) -> Bool {
         guard let appRemote = appRemote else {
             connectionStatusHandler?.connectionResult?(FlutterError(code: "errorConnection", message: "AppRemote is null", details: nil))
             connectionStatusHandler?.tokenResult?(FlutterError(code: "errorConnection", message: "AppRemote is null", details: nil))
             connectionStatusHandler?.connectionResult = nil
             connectionStatusHandler?.tokenResult = nil
-            return
+            return false
         }
 
         guard let token = appRemote.authorizationParameters(from: url)?[SPTAppRemoteAccessTokenKey] else {
@@ -407,10 +483,17 @@ extension SwiftSpotifySdkPlugin {
             connectionStatusHandler?.tokenResult?(FlutterError(code: "authenticationTokenError", message: appRemote.authorizationParameters(from: url)?[SPTAppRemoteErrorDescriptionKey], details: nil))
             connectionStatusHandler?.connectionResult = nil
             connectionStatusHandler?.tokenResult = nil
-            return
+            return false
         }
 
         appRemote.connectionParameters.accessToken = token
         appRemote.connect()
+        
+        return true
+    }
+
+    private func setAuthorizationCodeFromURL(_ application: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
+        if(mmSessionManager == nil) {return false}
+        return mmSessionManager!.application(application, open: url, options: options)
     }
 }

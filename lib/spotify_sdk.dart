@@ -153,6 +153,7 @@ class SpotifySdk {
     required String clientId,
     required String redirectUrl,
     required String tokenSwapUrl,
+    required String tokenRefreshUrl,
     String? scope,
   }) async {
     try {
@@ -162,6 +163,7 @@ class SpotifySdk {
           ParamNames.clientId: clientId,
           ParamNames.redirectUrl: redirectUrl,
           ParamNames.tokenSwapUrl: tokenSwapUrl,
+          ParamNames.tokenRefreshUrl: tokenRefreshUrl,
           ParamNames.scope: scope,
         },
       );
