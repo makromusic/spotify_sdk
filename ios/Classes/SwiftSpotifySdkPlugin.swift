@@ -422,7 +422,7 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDe
         if let additionalScopes = additionalScopes {
             scopes = additionalScopes.components(separatedBy: ",")
         }
-        
+
         // Note(resultanyildizi): Everything inside this block will now work on the main thread
         DispatchQueue.main.async {
             if accessToken != nil {
@@ -435,6 +435,9 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDe
               self.appRemote?.authorizeAndPlayURI(spotifyUri, asRadio: asRadio ?? false, additionalScopes: scopes) { success in
                 if (!success) {
                   self.connectionStatusHandler?.connectionResult?(FlutterError(code: "spotifyNotInstalled", message: "Spotify app is not installed", details: nil))
+                  self.connectionStatusHandler?.tokenResult?(FlutterError(code: "spotifyNotInstalled", message: "Spotify app is not installed", details: nil))
+                  self.connectionStatusHandler?.connectionResult = nil
+                  self.connectionStatusHandler?.tokenResult = nil
                 }
               }
             }
@@ -463,10 +466,11 @@ extension SwiftSpotifySdkPlugin {
         }
 
         if(requestedAuthCode == true) {
-            return setAuthorizationCodeFromURL(application, open: url)
+            _ = setAuthorizationCodeFromURL(application, open: url)
         } else {
-            return setAccessTokenFromURL(url: url)
+            _ = setAccessTokenFromURL(url: url)
         }
+        return false
     }
 
     private func setAccessTokenFromURL(url: URL) -> Bool {

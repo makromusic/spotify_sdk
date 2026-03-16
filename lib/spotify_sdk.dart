@@ -658,7 +658,7 @@ class SpotifySdk {
 
   /// Sets the repeat mode
   ///
-  /// Set [repeatMode] to a value of [RepeatMode] either [off, track, context].
+  /// Set [repeatMode] to a value of [RepeatMode].
   /// Throws a [PlatformException] if adding failed
   /// Throws a [MissingPluginException] if the method is not implemented on
   /// the native platforms.
