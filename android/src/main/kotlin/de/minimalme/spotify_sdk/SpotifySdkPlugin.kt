@@ -3,6 +3,7 @@ package de.minimalme.spotify_sdk
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import android.util.Log
 import com.spotify.android.appremote.api.ConnectionParams
 import com.spotify.android.appremote.api.Connector.ConnectionListener
@@ -101,6 +102,8 @@ class SpotifySdkPlugin : MethodCallHandler, FlutterPlugin, ActivityAware, Plugin
     private val errorDisconnecting = "errorDisconnecting"
     private val errorConnection = "errorConnection"
     private val errorAuthenticationToken = "authenticationTokenError"
+    private val errorAuthenticationEmpty = "authenticationEmptyResponse"
+    private val errorAuthenticationUnknown = "authenticationUnknownResponse"
 
     private var connStatusEventChannel: SetEvent<ConnectionStatusChannel.ConnectionEvent> = event()
 
@@ -375,7 +378,9 @@ class SpotifySdkPlugin : MethodCallHandler, FlutterPlugin, ActivityAware, Plugin
     private fun authFlow(resultCode: Int, data: Intent?) {
 
         val response: AuthorizationResponse = AuthorizationClient.getResponse(resultCode, data)
-        val result = pendingOperation!!.result
+        val pending = pendingOperation!!
+        val result = pending.result
+        val elapsedMs = SystemClock.uptimeMillis() - pending.startedAtUptimeMs
         pendingOperation = null
 
         when (response.type) {
@@ -386,8 +391,27 @@ class SpotifySdkPlugin : MethodCallHandler, FlutterPlugin, ActivityAware, Plugin
                 result.success(response.code)
             }
             AuthorizationResponse.Type.ERROR -> result.error(errorAuthenticationToken, "Authentication went wrong", response.error)
-            else -> result.notImplemented()
+            // EMPTY means no authorization result was delivered at all: the user
+            // dismissed the auth screen, LoginActivity was destroyed before it could
+            // complete, or Spotify's SSO activity aborted. Answering notImplemented()
+            // here sends an empty envelope, which Dart raises as a bogus
+            // MissingPluginException naming this very channel — so report a real error.
+            AuthorizationResponse.Type.EMPTY -> result.error(
+                    errorAuthenticationEmpty,
+                    "Spotify returned no authorization result",
+                    authDiagnostics(resultCode, response, data, elapsedMs))
+            else -> result.error(
+                    errorAuthenticationUnknown,
+                    "Spotify returned an unrecognized authorization response",
+                    authDiagnostics(resultCode, response, data, elapsedMs))
         }
+    }
+
+    // Rides along in the PlatformException details so the caller can tell an aborted
+    // hand-off (resultCode 0, no data, back almost instantly) apart from a deliberate
+    // dismissal, which cannot happen faster than a human can read the screen.
+    private fun authDiagnostics(resultCode: Int, response: AuthorizationResponse, data: Intent?, elapsedMs: Long): String {
+        return "resultCode=$resultCode, type=${response.type}, hasData=${data != null}, elapsedMs=$elapsedMs"
     }
 
     private fun String.checkAndSetPendingOperation(result: Result) {
@@ -396,8 +420,8 @@ class SpotifySdkPlugin : MethodCallHandler, FlutterPlugin, ActivityAware, Plugin
         {
             "Concurrent operations detected: " + pendingOperation?.method.toString() + ", " + this
         }
-        pendingOperation = PendingOperation(this, result)
+        pendingOperation = PendingOperation(this, result, SystemClock.uptimeMillis())
     }
 }
 
-private class PendingOperation internal constructor(val method: String, val result: Result)
+private class PendingOperation internal constructor(val method: String, val result: Result, val startedAtUptimeMs: Long)
