@@ -43,6 +43,15 @@ class SpotifySdkPlugin : MethodCallHandler, FlutterPlugin, ActivityAware, Plugin
     private var userStatusChannel : EventChannel? = null
     private var connectionStatusChannel : EventChannel? = null
 
+    // Stream handlers are installed once and reused across connections. Re-installing a handler
+    // resets the event channel's active sink to null without notifying Dart, orphaning a live Dart
+    // subscription whose next cancel then fails with "No active stream to cancel". On (re)connect
+    // the handlers are re-pointed at the new app remote's apis instead.
+    private val playerContextHandler = PlayerContextChannel()
+    private val playerStateHandler = PlayerStateChannel()
+    private val capabilitiesHandler = CapabilitiesChannel()
+    private val userStatusHandler = UserStatusChannel()
+
     private val playerContextSubscription = "player_context_subscription"
     private val playerStateSubscription = "player_state_subscription"
     private val capabilitiesSubscription = "capabilities_subscription"
@@ -128,6 +137,10 @@ class SpotifySdkPlugin : MethodCallHandler, FlutterPlugin, ActivityAware, Plugin
         userStatusChannel = EventChannel(binding.binaryMessenger, userStatusSubscription)
         connectionStatusChannel = EventChannel(binding.binaryMessenger, connectionStatusSubscription)
 
+        playerContextChannel?.setStreamHandler(playerContextHandler)
+        playerStateChannel?.setStreamHandler(playerStateHandler)
+        capabilitiesChannel?.setStreamHandler(capabilitiesHandler)
+        userStatusChannel?.setStreamHandler(userStatusHandler)
         connectionStatusChannel?.setStreamHandler(ConnectionStatusChannel(connStatusEventChannel))
     }
 
@@ -230,14 +243,13 @@ class SpotifySdkPlugin : MethodCallHandler, FlutterPlugin, ActivityAware, Plugin
                         override fun onConnected(spotifyAppRemoteValue: SpotifyAppRemote) {
                             spotifyAppRemote = spotifyAppRemoteValue
 
-                            playerContextChannel?.setStreamHandler(PlayerContextChannel(spotifyAppRemote!!.playerApi))
-                            Log.i(loggingTag, "Set stream handler for PlayerContextChannel")
-                            playerStateChannel?.setStreamHandler(PlayerStateChannel(spotifyAppRemote!!.playerApi))
-                            Log.i(loggingTag, "Set stream handler for PlayerStateChannel")
-                            capabilitiesChannel?.setStreamHandler(CapabilitiesChannel(spotifyAppRemote!!.userApi))
-                            Log.i(loggingTag, "Set stream handler for CapabilitiesChannel")
-                            userStatusChannel?.setStreamHandler(UserStatusChannel(spotifyAppRemote!!.userApi))
-                            Log.i(loggingTag, "Set stream handler for UserStatusChannel")
+                            // Re-point the long lived stream handlers at the new app remote. Any Dart
+                            // subscription that is already listening is re-subscribed transparently.
+                            playerContextHandler.playerApi = spotifyAppRemoteValue.playerApi
+                            playerStateHandler.playerApi = spotifyAppRemoteValue.playerApi
+                            capabilitiesHandler.userApi = spotifyAppRemoteValue.userApi
+                            userStatusHandler.userApi = spotifyAppRemoteValue.userApi
+                            Log.i(loggingTag, "Re-pointed subscription handlers at the new app remote")
                             initiallyConnected = true
 
                             Log.i(loggingTag, "App Remote successfully connected")
@@ -350,6 +362,13 @@ class SpotifySdkPlugin : MethodCallHandler, FlutterPlugin, ActivityAware, Plugin
     private fun disconnectFromSpotify(result: Result) {
         if (spotifyAppRemote != null && spotifyAppRemote!!.isConnected) {
             SpotifyAppRemote.disconnect(spotifyAppRemote)
+
+            // The apis belong to the app remote that just went away. A Dart subscription may still
+            // be listening; it stays registered and is re-subscribed on the next connect.
+            playerContextHandler.playerApi = null
+            playerStateHandler.playerApi = null
+            capabilitiesHandler.userApi = null
+            userStatusHandler.userApi = null
 
             // emit connection terminated event
             connStatusEventChannel(ConnectionStatusChannel.ConnectionEvent(false, "Successfully disconnected from Spotify.", null, null))

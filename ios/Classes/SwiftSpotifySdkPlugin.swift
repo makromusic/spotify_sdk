@@ -5,6 +5,7 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDe
     private static var instance = SwiftSpotifySdkPlugin()
     private var appRemote: SPTAppRemote?
     private var connectionStatusHandler: ConnectionStatusHandler?
+    private var playerDelegate: PlayerDelegate?
     private var playerStateHandler: PlayerStateHandler?
     private var playerContextHandler: PlayerContextHandler?
     private static var playerStateChannel: FlutterEventChannel?
@@ -25,6 +26,24 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDe
         registrar.addMethodCallDelegate(instance, channel: spotifySDKChannel)
         instance.connectionStatusHandler = ConnectionStatusHandler()
         connectionStatusChannel.setStreamHandler(instance.connectionStatusHandler)
+
+        // The player stream handlers are installed once and reused across connections. Installing a
+        // stream handler again would swap in a fresh handler whose sink is nil, orphaning a live Dart
+        // subscription whose next cancel then fails with "No active stream to cancel". On connect the
+        // handlers are re-pointed at the new app remote instead (see configureAppRemote).
+        let playerDelegate = PlayerDelegate()
+        instance.playerDelegate = playerDelegate
+        instance.playerStateHandler = PlayerStateHandler(playerDelegate: playerDelegate)
+        instance.playerContextHandler = PlayerContextHandler(playerDelegate: playerDelegate)
+        playerStateChannel?.setStreamHandler(instance.playerStateHandler)
+        playerContextChannel?.setStreamHandler(instance.playerContextHandler)
+
+        // A newly established connection exposes a new player API. Re-arm any Dart subscription that
+        // is already listening, so its stream survives the reconnect.
+        instance.connectionStatusHandler?.onConnectionEstablished = { [weak plugin = instance] in
+            plugin?.playerStateHandler?.subscribeToPlayerAPI()
+            plugin?.playerContextHandler?.subscribeToPlayerAPI()
+        }
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -405,12 +424,11 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDe
             let configuration = SPTConfiguration(clientID: clientID, redirectURL: redirectURL)
             let appRemote = SPTAppRemote(configuration: configuration, logLevel: .none)
             appRemote.delegate = connectionStatusHandler
-            let playerDelegate = PlayerDelegate()
-            playerStateHandler = PlayerStateHandler(appRemote: appRemote, playerDelegate: playerDelegate)
-            SwiftSpotifySdkPlugin.playerStateChannel?.setStreamHandler(playerStateHandler)
 
-            playerContextHandler = PlayerContextHandler(appRemote: appRemote, playerDelegate: playerDelegate)
-            SwiftSpotifySdkPlugin.playerContextChannel?.setStreamHandler(playerContextHandler)
+            // Re-point the long lived stream handlers at the new app remote. Their Dart subscriptions
+            // stay registered and are re-armed once the connection is established.
+            playerStateHandler?.appRemote = appRemote
+            playerContextHandler?.appRemote = appRemote
 
             appRemote.connectionParameters.accessToken = accessToken
             self.appRemote = appRemote

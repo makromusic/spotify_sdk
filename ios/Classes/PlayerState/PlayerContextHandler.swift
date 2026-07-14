@@ -1,18 +1,8 @@
 import SpotifyiOS
 
-class PlayerContextHandler: StatusHandler {
-    private let appRemote: SPTAppRemote
-    private let playerDelegate: PlayerDelegate
-
-    init (appRemote: SPTAppRemote, playerDelegate: PlayerDelegate) {
-        self.appRemote = appRemote
-        self.playerDelegate = playerDelegate
-        super.init()
-    }
-
-    override func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
-        _ = super.onListen(withArguments: arguments, eventSink: events)
-        playerDelegate.playerContextSink = events
-        return nil
+/// Streams the player context to Dart. See `PlayerStreamHandler` for why the handler is long lived.
+class PlayerContextHandler: PlayerStreamHandler {
+    override func bindSink(_ sink: FlutterEventSink?) {
+        playerDelegate.playerContextSink = sink
     }
 }

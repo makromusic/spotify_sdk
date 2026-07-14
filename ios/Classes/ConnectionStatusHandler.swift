@@ -5,8 +5,13 @@ class ConnectionStatusHandler: StatusHandler, SPTAppRemoteDelegate {
     var tokenResult: FlutterResult?
     var codeResult: FlutterResult?
     var connectionResult: FlutterResult?
-    
+
+    /// Called once a connection is established, so the player stream handlers can re-arm a Dart
+    /// subscription that is already listening against the newly available player API.
+    var onConnectionEstablished: (() -> Void)?
+
     func appRemoteDidEstablishConnection(_ appRemote: SPTAppRemote) {
+        onConnectionEstablished?()
         connectionResult?(true)
         tokenResult?(appRemote.connectionParameters.accessToken)
         eventSink?("{\"connected\": true}")
