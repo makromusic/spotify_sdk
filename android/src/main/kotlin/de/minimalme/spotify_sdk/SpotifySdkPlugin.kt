@@ -107,6 +107,11 @@ class SpotifySdkPlugin : MethodCallHandler, FlutterPlugin, ActivityAware, Plugin
     private val paramRepeatMode = "repeatMode"
     private val paramShuffle = "shuffle"
 
+    // The Intent extra LoginActivity packs its AuthorizationResponse bundle into. The SDK keeps
+    // the constant package-private, so the literal is repeated here; it is only ever read for
+    // diagnostics, and reading it as absent is itself a diagnostic rather than a failure.
+    private val extraAuthResponse = "EXTRA_AUTH_RESPONSE"
+
     private val errorConnecting = "errorConnecting"
     private val errorDisconnecting = "errorDisconnecting"
     private val errorConnection = "errorConnection"
@@ -396,6 +401,16 @@ class SpotifySdkPlugin : MethodCallHandler, FlutterPlugin, ActivityAware, Plugin
 
     private fun authFlow(resultCode: Int, data: Intent?) {
 
+        // AuthorizationResponse is an app class: the framework class loader cannot resolve it,
+        // and Bundle.getParcelable answers null rather than throwing when resolution fails, which
+        // the SDK cannot tell apart from "no response was sent". Handing it the loader that
+        // defines the class removes that failure mode.
+        //
+        // This has to happen before the SDK reads the Intent. A Bundle unparcels lazily and only
+        // once — a read that cannot resolve the class empties the map and keeps it emptied, so
+        // setting the loader afterwards recovers nothing.
+        data?.setExtrasClassLoader(AuthorizationResponse::class.java.classLoader)
+
         val response: AuthorizationResponse = AuthorizationClient.getResponse(resultCode, data)
         val pending = pendingOperation!!
         val result = pending.result
@@ -426,11 +441,45 @@ class SpotifySdkPlugin : MethodCallHandler, FlutterPlugin, ActivityAware, Plugin
         }
     }
 
-    // Rides along in the PlatformException details so the caller can tell an aborted
-    // hand-off (resultCode 0, no data, back almost instantly) apart from a deliberate
-    // dismissal, which cannot happen faster than a human can read the screen.
+    // Rides along in the PlatformException details so the caller can tell an aborted hand-off
+    // (resultCode 0, no data, back almost instantly) apart from a deliberate dismissal, which
+    // cannot happen faster than a human can read the screen.
+    //
+    // The remaining fields separate the causes of the case those two cannot explain: an EMPTY
+    // response alongside RESULT_OK and a non-null Intent. LoginActivity.onClientComplete is the
+    // only path that sets RESULT_OK and it always packs the bundle and the parcelable together,
+    // so the response was sent and arrived unreadable. Which of these is printed says why:
+    //
+    //   hasBundle=true,  bundleKeys=none      the bundle survived but the parcelable inside it
+    //                                         did not resolve, even with the class loader set —
+    //                                         refutes the class-loader explanation
+    //   hasBundle=false, extraKeys=<spotify>  the Intent is Spotify's but carries no auth bundle
+    //   hasBundle=false, extraKeys=<foreign>  this is not Spotify's Intent at all; something else
+    //                                         answered on request code 1337
+    //   hasBundle=false, extraKeys=none       the extras were lost wholesale in transit
+    //
+    // Key names only, never values: the response bundle holds the access token and the
+    // authorization code, and this string is reported to a crash service.
     private fun authDiagnostics(resultCode: Int, response: AuthorizationResponse, data: Intent?, elapsedMs: Long): String {
-        return "resultCode=$resultCode, type=${response.type}, hasData=${data != null}, elapsedMs=$elapsedMs"
+        val bundle = readOrNull { data?.getBundleExtra(extraAuthResponse) }
+        val bundleKeys = readOrNull { bundle?.keySet()?.sorted()?.joinToString("|") } ?: "none"
+        val extraKeys = readOrNull { data?.extras?.keySet()?.sorted()?.joinToString("|") } ?: "none"
+
+        return "resultCode=$resultCode, type=${response.type}, hasData=${data != null}, " +
+                "hasBundle=${bundle != null}, bundleKeys=$bundleKeys, extraKeys=$extraKeys, " +
+                "action=${data?.action ?: "none"}, component=${data?.component?.shortClassName ?: "none"}, " +
+                "elapsedMs=$elapsedMs"
+    }
+
+    // Reading a parcel that already failed to unmarshal throws rather than answering null, and a
+    // diagnostic that crashes destroys the report it was meant to carry.
+    private fun <T> readOrNull(read: () -> T?): T? {
+        return try {
+            read()
+        } catch (e: Exception) {
+            Log.w(loggingTag, "Could not read Spotify auth diagnostics: $e")
+            null
+        }
     }
 
     private fun String.checkAndSetPendingOperation(result: Result) {
