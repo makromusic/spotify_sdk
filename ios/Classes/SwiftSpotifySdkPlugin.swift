@@ -10,7 +10,13 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDe
     private var playerContextHandler: PlayerContextHandler?
     private static var playerStateChannel: FlutterEventChannel?
     private static var playerContextChannel: FlutterEventChannel?
-    private var requestedAuthCode: Bool?
+    /// Set while an authorization code request waits for its redirect, and cleared the moment that
+    /// request is answered. It must not outlive the request it belongs to: the plugin is a process
+    /// wide singleton, so a flag left standing routes a *later* app remote redirect to the session
+    /// manager. That redirect carries an access token rather than a code, the session manager has
+    /// nothing to do with it, and the connect callback is never invoked -- leaving every subsequent
+    /// connect to time out until the app is relaunched.
+    private var awaitingAuthCode = false
     private var mmSessionManager: SPTSessionManager?
 
     public static func register(with registrar: FlutterPluginRegistrar) {
@@ -131,8 +137,8 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDe
                     throw SpotifyError.redirectURLInvalid
                 }
                 
-                requestedAuthCode = true
-                
+                awaitingAuthCode = true
+
                 let configuration = SPTConfiguration(clientID: clientID, redirectURL: redirectURL)
                 // This prevents SDK from auto verifying the authorization code
                 // and generating an access token. Instead, it redirects the
@@ -404,15 +410,21 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDe
     }
     
     public func sessionManager(manager: SPTSessionManager, didFailWith error: Error) {
-        
+        // Without this the Dart future for getAuthorizationCode never completes, so a failed
+        // authorization leaves the caller waiting rather than telling it what went wrong.
+        awaitingAuthCode = false
+        connectionStatusHandler?.codeResult?(FlutterError(code: "authenticationTokenError", message: error.localizedDescription, details: nil))
+        connectionStatusHandler?.codeResult = nil
     }
-    
+
     public func sessionManager(manager: SPTSessionManager, didRenew session: SPTSession) {
-        
+
     }
-    
+
     public func sessionManager(manager: SPTSessionManager, shouldRequestAccessTokenWith code: String) -> Bool {
+        awaitingAuthCode = false
         connectionStatusHandler?.codeResult?(code)
+        connectionStatusHandler?.codeResult = nil
         return true
     }
 
@@ -465,7 +477,7 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDe
 
 extension SwiftSpotifySdkPlugin {
     public func application(_ application: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
-        if(requestedAuthCode == true) {
+        if isAuthorizationCodeRedirect(url) {
             return setAuthorizationCodeFromURL(application, open: url, options: options)
         } else {
             return setAccessTokenFromURL(url: url)
@@ -483,12 +495,29 @@ extension SwiftSpotifySdkPlugin {
                 return false
         }
 
-        if(requestedAuthCode == true) {
+        if isAuthorizationCodeRedirect(url) {
             _ = setAuthorizationCodeFromURL(application, open: url)
         } else {
             _ = setAccessTokenFromURL(url: url)
         }
         return false
+    }
+
+    /// Works out which flow a redirect belongs to from the URL itself, so a request that is already
+    /// finished can never capture the redirect of the next one.
+    ///
+    /// The authorization code flow comes back with a `code` query item; an app remote authorize
+    /// comes back with an access token. A redirect carrying neither is an error or a cancellation,
+    /// and belongs to whichever request is still in flight.
+    private func isAuthorizationCodeRedirect(_ url: URL) -> Bool {
+        let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        if queryItems.contains(where: { $0.name == "code" }) {
+            return true
+        }
+        if appRemote?.authorizationParameters(from: url)?[SPTAppRemoteAccessTokenKey] != nil {
+            return false
+        }
+        return awaitingAuthCode
     }
 
     private func setAccessTokenFromURL(url: URL) -> Bool {
