@@ -48,3 +48,7 @@ build/
 SpotifyiOS.framework
 **/doc/api/
 /ios/ios-sdk/
+
+# SwiftPM output from `swift test` (see Package.swift)
+/.build/
+/.swiftpm/

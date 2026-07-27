@@ -2,6 +2,15 @@ name: spotify_sdk
 on: pull_request
 
 jobs:
+  # The iOS plugin's redirect routing is pure Swift with no Flutter or SpotifyiOS import, so it runs
+  # here without an Xcode project, a host app or the vendored framework. Needs macOS for Swift.
+  ios-routing-tests:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test redirect routing
+        run: swift test
+
   build:
     runs-on: ubuntu-latest
     steps:

@@ -10,14 +10,21 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDe
     private var playerContextHandler: PlayerContextHandler?
     private static var playerStateChannel: FlutterEventChannel?
     private static var playerContextChannel: FlutterEventChannel?
-    /// Set while an authorization code request waits for its redirect, and cleared the moment that
-    /// request is answered. It must not outlive the request it belongs to: the plugin is a process
-    /// wide singleton, so a flag left standing routes a *later* app remote redirect to the session
-    /// manager. That redirect carries an access token rather than a code, the session manager has
-    /// nothing to do with it, and the connect callback is never invoked -- leaving every subsequent
-    /// connect to time out until the app is relaunched.
-    private var awaitingAuthCode = false
     private var mmSessionManager: SPTSessionManager?
+
+    /// True while a getAuthorizationCode request is still waiting for its redirect.
+    ///
+    /// Derived from the pending result rather than tracked in a flag of its own. The plugin is a
+    /// process wide singleton, so a hand-maintained flag that is set but never cleared stays true
+    /// for the rest of the process -- which is what used to send a *later* app remote redirect to
+    /// the session manager. That redirect carries an access token rather than a code, the session
+    /// manager has nothing to do with it, and the connect callback was never invoked, leaving every
+    /// following connect to time out until the app was relaunched. `codeResult` cannot drift like
+    /// that: it is the callback the request is waiting on, so it exists exactly as long as the
+    /// request does.
+    private var isAwaitingAuthCode: Bool {
+        connectionStatusHandler?.codeResult != nil
+    }
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         guard playerStateChannel == nil else {
@@ -136,8 +143,6 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDe
                 guard let redirectURL = URL(string: url) else {
                     throw SpotifyError.redirectURLInvalid
                 }
-                
-                awaitingAuthCode = true
 
                 let configuration = SPTConfiguration(clientID: clientID, redirectURL: redirectURL)
                 // This prevents SDK from auto verifying the authorization code
@@ -411,8 +416,8 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDe
     
     public func sessionManager(manager: SPTSessionManager, didFailWith error: Error) {
         // Without this the Dart future for getAuthorizationCode never completes, so a failed
-        // authorization leaves the caller waiting rather than telling it what went wrong.
-        awaitingAuthCode = false
+        // authorization leaves the caller waiting rather than telling it what went wrong. Clearing
+        // codeResult is also what marks the request as no longer in flight.
         connectionStatusHandler?.codeResult?(FlutterError(code: "authenticationTokenError", message: error.localizedDescription, details: nil))
         connectionStatusHandler?.codeResult = nil
     }
@@ -422,7 +427,6 @@ public class SwiftSpotifySdkPlugin: NSObject, FlutterPlugin, SPTSessionManagerDe
     }
 
     public func sessionManager(manager: SPTSessionManager, shouldRequestAccessTokenWith code: String) -> Bool {
-        awaitingAuthCode = false
         connectionStatusHandler?.codeResult?(code)
         connectionStatusHandler?.codeResult = nil
         return true
@@ -503,21 +507,15 @@ extension SwiftSpotifySdkPlugin {
         return false
     }
 
-    /// Works out which flow a redirect belongs to from the URL itself, so a request that is already
-    /// finished can never capture the redirect of the next one.
-    ///
-    /// The authorization code flow comes back with a `code` query item; an app remote authorize
-    /// comes back with an access token. A redirect carrying neither is an error or a cancellation,
-    /// and belongs to whichever request is still in flight.
+    /// Reads the access token the only way it can be read -- through the SDK -- and leaves the
+    /// decision itself to [spotifyRedirectRoute], which is testable on its own.
     private func isAuthorizationCodeRedirect(_ url: URL) -> Bool {
-        let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        if queryItems.contains(where: { $0.name == "code" }) {
-            return true
-        }
-        if appRemote?.authorizationParameters(from: url)?[SPTAppRemoteAccessTokenKey] != nil {
-            return false
-        }
-        return awaitingAuthCode
+        let hasAccessToken = appRemote?.authorizationParameters(from: url)?[SPTAppRemoteAccessTokenKey] != nil
+        return spotifyRedirectRoute(
+            url: url,
+            hasAccessToken: hasAccessToken,
+            isAwaitingAuthCode: isAwaitingAuthCode
+        ) == .authorizationCode
     }
 
     private func setAccessTokenFromURL(url: URL) -> Bool {
