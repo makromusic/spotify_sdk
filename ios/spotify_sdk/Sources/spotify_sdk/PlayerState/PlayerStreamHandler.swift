@@ -1,3 +1,4 @@
+import Flutter
 import SpotifyiOS
 
 /// Base for the player state / player context stream handlers.

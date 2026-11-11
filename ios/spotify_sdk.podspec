@@ -13,10 +13,10 @@ Unofficial Spotify Flutter SDK.
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'Your Company' => 'fdimanidis@gmail.com' }
   s.source           = { :path => '.' }
-  s.source_files = 'Classes/**/*'
+  s.source_files = 'spotify_sdk/Sources/spotify_sdk/**/*.swift'
   s.dependency 'Flutter'
-  s.platform = :ios, '12.0'
-  s.ios.deployment_target = '12.0'
+  s.platform = :ios, '13.0'
+  s.ios.deployment_target = '13.0'
   # Flutter.framework does not contain a i386 slice. Only x86_64 simulators are supported.
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'VALID_ARCHS[sdk=iphonesimulator*]' => 'x86_64' }
   s.swift_version = '5.0'
